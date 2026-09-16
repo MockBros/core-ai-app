@@ -6,8 +6,16 @@
 > service, and one dashboard for latency / cost / errors.
 
 Everything here is **provider-agnostic and gated**: with no keys set, the stack
-runs fully offline (mock providers, naive RAG) and observability is a clean
-no-op. You only wire a provider when you have its DSN/keys.
+runs offline-capable (mock providers, NaiveRAG) and hosted observability is
+disabled. Local JSONL tracing remains available without provider keys. You only
+wire a provider when you have its DSN/keys.
+
+> **Readiness boundary:** `.github/workflows/deploy.yml` is manual
+> (`workflow_dispatch`) and its deploy commands are still placeholders. CI
+> Compose/config checks and Docker image builds prove syntax and buildability;
+> they do not prove that a running service, provider credentials, LiveKit room,
+> external persistence, or hosted deployment is ready. Record those runtime and
+> provider checks separately.
 
 ---
 
@@ -38,9 +46,9 @@ Region is pinned in:
 | Component        | Where it runs                                   | Port | Health     |
 | ---------------- | ----------------------------------------------- | ---- | ---------- |
 | **web** (Next)   | Vercel (`sin1`) — or the `web` container        | 3000 | `/api/health` |
-| **agent-api**    | Container (Render/Fly `sin`) — FastAPI prep/score | 8000 | `/health`  |
+| **agent-api**    | Container (Render/Fly `sin`) — FastAPI prep/score | 8000 | `/health` (liveness)  |
 | **agent-worker** | LiveKit Cloud Agents **SGP** (live voice loop)  | —    | LiveKit Cloud |
-| **lightrag**     | Container (`sin`) — knowledge sidecar           | 9621 | `/health`  |
+| **lightrag**     | Container (`sin`) — knowledge sidecar           | 9621 | `/health` (liveness)  |
 | **Supabase**     | Managed (`ap-southeast-1`) — Postgres/Auth/Storage | —  | managed    |
 | **R2**           | Cloudflare (global) — CV files + recordings     | —    | managed    |
 
@@ -71,6 +79,10 @@ ship neither `curl` nor `wget`:
 `web` and `agent-api` `depends_on` `lightrag` being **healthy** before they
 start.
 
+These health endpoints are liveness/route checks only. A `200` response does
+not verify provider keys, database connectivity, retrieval quality, a LiveKit
+worker, or prep/score completion.
+
 ### Images
 
 - **web** — `apps/web/Dockerfile`, multi-stage, Next.js **standalone** output
@@ -81,7 +93,9 @@ start.
 - **agent** — `apps/agent/Dockerfile`, `python:3.11-slim` + uv. Base
   `uv sync --no-dev` only (no `livekit` / `observability` extras), so the API
   runs on mock providers with zero keys.
-- **lightrag** — `services/lightrag/Dockerfile`, naive RAG by default.
+- **lightrag** — `services/lightrag/Dockerfile`, functional NaiveRAG by default;
+  the alternate LightRAG backend remains an unimplemented scaffold (see the
+  [service README](../services/lightrag/README.md)).
 
 ---
 
@@ -89,7 +103,8 @@ start.
 
 `.github/workflows/ci.yml` runs on every push/PR: schema parity, build,
 typecheck, lint, JS + Python tests (agent **and** lightrag sidecar), and
-`docker compose config -q`.
+`docker compose config -q`. These are repository/CI checks, not a hosted
+runtime qualification.
 
 `.github/workflows/deploy.yml` is the **gated** deploy (manual
 `workflow_dispatch` only — there is intentionally no `push:` trigger until the
@@ -132,25 +147,32 @@ same keys as **deployment secrets** on each platform:
   on mocks with none set.
 
 With **no** keys: providers fall back to deterministic mocks, RAG falls back to
-the naive backend, and observability is off. The build and tests stay green.
+the NaiveRAG backend, hosted observability is off, and local JSONL traces remain
+available under `.deepinterview/traces`. The build and tests stay green.
 
 ---
 
 ## 6. One dashboard: latency · cost · errors
 
 **Local traces work out of the box; hosted providers are gated.** The agent
-writes one JSONL file per run to `TRACE_DIR` (default `.deepinterview/`,
-gitignored) — no keys, no extra install:
+writes local trace state as one JSONL file per traced run to `TRACE_DIR` (default
+`.deepinterview/traces`, gitignored) — no keys, no extra install. This directory
+is machine-local state, not a hosted trace store or a retention/backup policy:
 
-- **Agent work → local traces + CLI.** Every prep/score/live/coach run opens a
-  trace (`prep` / `score` / `live` / `coach` + `session_id`); prep nodes,
-  scoring stages, and every LLM call (mock included) become timed spans.
-  Inspect with `deepinterview traces list`, replay with
+- **Agent work → local traces + CLI.** Prep and score runs, plus the LiveKit
+  interview and spoken-coach workers, open traces (`prep` / `score` / `live` /
+  `coach` + `session_id`); prep nodes, scoring stages, and every LLM call (mock
+  included) become timed spans. Inspect with `deepinterview traces list`, replay with
   `deepinterview traces show <trace-id> [--json]`, or serve over HTTP via
   `GET /api/traces[?session_id=&limit=]` and `GET /api/traces/{id}`.
   `TRACE_ENABLED=0` disables even local tracing (the test suite sets this);
   `TRACE_INCLUDE_PROMPTS=1` additionally stores short prompt previews
   (default off — traces hold lengths/metadata only, no CV/JD text).
+- **HTTP coach/KB paths are separate.** The `/api/coach/plan`, `/api/coach/chat`,
+  `/api/kb/*`, and sidecar `/kb/*` request paths are not equivalent to the
+  prep/score/live pipeline traces; they do not automatically create the same
+  trace spans. A successful coach or KB response is not LiveKit or provider
+  readiness evidence.
 - **LLM tracing & cost → Langfuse (opt-in).** Set `LANGFUSE_PUBLIC_KEY` +
   `LANGFUSE_SECRET_KEY` (+ optional `LANGFUSE_HOST`) and
   `uv sync --extra observability`: spans are additionally forwarded as OTel

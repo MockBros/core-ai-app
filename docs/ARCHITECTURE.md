@@ -21,7 +21,7 @@ does no blocking I/O on the critical path.
 | -------- | ------------------- | ---------------------------------------- | --- |
 | **Prep** | before the call     | strong async models (LangGraph pipeline) | Parse CV + JD, research the company, build the `InterviewContext` blackboard and a `QuestionPlan`. |
 | **Live** | during the call     | one fast model on the turn path          | Ask the planned questions, listen, record answers/turns. No web search, no scoring, no DB reads mid-turn. |
-| **Post** | after the call      | strong async models (LangGraph pipeline) | Score competencies, language-coach, write the report; distill reusable skills. |
+| **Post** | after the call      | strong async models (plain sequential pipeline) | Evaluate competencies, optionally verify scores, assess language, assemble the report; distill reusable skills. |
 
 ```mermaid
 flowchart LR
@@ -81,6 +81,12 @@ the agent (`apps/agent/.../shared_models.py`), with a parity test
 (`apps/agent/tests/test_parity.py`) and round-trip fixtures keeping the two in
 sync.
 
+Contract changes follow this repository-owned sequence: [`packages/shared/src`](../packages/shared/src)
+→ [`apps/agent/src/deepinterview_agent/shared_models.py`](../apps/agent/src/deepinterview_agent/shared_models.py)
+→ [`packages/shared/schema`](../packages/shared/schema) → TypeScript
+round-trip/invariant tests → Python parity/round-trip tests → persisted
+fixture/default compatibility.
+
 - **Prep writes it.** The LangGraph prep pipeline produces the candidate
   summary, company intel, job spec, and the `QuestionPlan`.
 - **Live reads + appends it.** The interviewer injects only a *compact* slice
@@ -111,6 +117,12 @@ adding one adapter behind the existing interface — not touching call sites. Th
 web side mirrors this with billing/storage/knowledge helpers that degrade to a
 safe offline path when their env vars are unset.
 
+The knowledge sidecar's currently functional backend is the deterministic,
+in-memory `NaiveRAG` default. `LightRAGBackend` is an optional, gated scaffold;
+its real ingestion/query implementation is not present yet. See the
+[`services/lightrag` README](../services/lightrag/README.md) for its evidence
+and request-safety boundaries.
+
 ## Package map
 
 ```
@@ -121,12 +133,15 @@ deepinterview/
 │   │   ├── app/{setup,interview,report,prep,...}/   # screens
 │   │   ├── components/      # interview · report · prep · avatar · ui
 │   │   └── lib/             # i18n · session · supabase · livekit · r2 · kb
-│   └── agent/               # Python 3.11+ LiveKit worker + LangGraph pipelines
+│   └── agent/               # Python 3.11+ FastAPI API + optional LiveKit workers
 │       └── src/deepinterview_agent/
-│           ├── api/         # FastAPI routers: /api/prep, /api/score
+│           ├── api/         # FastAPI routers: prep, score, coach, KB, sessions, traces
 │           ├── prep/        # LangGraph prep pipeline (graph · nodes · prompts · state)
-│           ├── live/        # LiveKit interviewer · director · handoffs · state · kb_tool
-│           ├── post/        # evaluator · language_coach · report
+│           ├── live/        # LiveKit interviewer · director · handoffs · state
+│           ├── post/        # sequential evaluator · verifier · language_coach · report
+│           ├── coach/       # sequential study-plan and grounded-chat logic
+│           ├── worker.py    # LiveKit interview worker (separate process)
+│           ├── worker_coach.py # optional spoken-coach worker
 │           ├── core/        # adapters · config · deps · persistence · observability
 │           └── skilllib/    # skill distiller · scrub · promote · store
 ├── packages/shared/         # TS ↔ Pydantic contracts (InterviewContext, QuestionPlan, …) + JSON schema
@@ -139,6 +154,14 @@ deepinterview/
 `packages/shared` is built **first** (WP-0): nothing else compiles until those
 contracts round-trip JSON between web and agent.
 
+The FastAPI application and LiveKit worker are separate processes. The worker
+loads the prepped context from `GET /api/session/{id}`, then posts its final
+transcript/context to `/api/session/{id}/live-result` and triggers `/api/score`.
+That API write is required for the default process-local `MemoryRepository`,
+because a worker process cannot see the API process's memory. The worker keeps
+a direct-repository fallback for deployments where both processes share
+Supabase; it is not a substitute for the API write on the in-memory path.
+
 ## REST and room contracts
 
 Three processes expose HTTP. Paths below are the real route definitions in the
@@ -149,7 +172,7 @@ code, not shorthand.
 | `/api/prep`         | POST   | **agent** FastAPI (`apps/agent`)   | Run the prep pipeline → `InterviewContext` + `QuestionPlan`. |
 | `/api/score`        | POST   | **agent** FastAPI (`apps/agent`)   | Run the scoring/post pipeline → `ScoreCard`. |
 | `/health`           | GET    | **agent** FastAPI (`apps/agent`)   | Liveness check (`{"ok": true}`). |
-| `/api/session/[id]` | GET    | **web** (`apps/web`)               | Read a session view (context/scorecard/transcript) via the agent API. |
+| `/api/session/[id]` | GET    | **web** (`apps/web`)               | Read a session view (context/scorecard) via the agent API. |
 | `/api/upload`       | POST   | **web** (`apps/web`)               | CV upload (server-side parse) → forwards to prep. |
 | `/api/coach/chat`   | POST   | **web** (`apps/web`)               | Prep-coach chat proxy. |
 | `/api/kb/query`     | POST   | **web** (`apps/web`)               | Proxy: forwards to the lightrag sidecar's `/kb/query` (via `LIGHTRAG_URL`). |
@@ -162,6 +185,13 @@ LiveKit access token is minted by a server action (`createInterviewToken` in
 were removed with the uncapped OSS build. The
 lightrag port is configurable via `LIGHTRAG_PORT`, default `9621`.)
 
+The web setup server action posts prep to the agent's `AGENT_API_URL`; the live
+worker posts its live result and triggers scoring there. Web session/report
+reads use the agent session view. The web coach route proxies to the agent's
+sequential coach flow, while the web KB query route can call the sidecar
+directly. These HTTP paths are not evidence that a LiveKit worker or a hosted
+provider is running.
+
 **Room contract (live voice).** The browser gets a scoped token from the
 `createInterviewToken` server action, joins the LiveKit room, and talks to the agent worker. The
 turn loop is **cascaded STT → LLM → TTS** (not speech-to-speech) so we get
@@ -172,7 +202,8 @@ current question) and `get_next_question` (advance through the precomputed
 
 ---
 
-For depth on any of the above — the LangGraph node graphs, avatar/Veo prompts,
-scoring rubrics, and the per-WP interface contracts — read the code in the
-package each concerns (`apps/agent/src/deepinterview_agent/{prep,post,live}`,
-`scripts/veo`, `skills/`) and the contracts in `packages/shared`.
+For depth on any of the above — the prep LangGraph graph, live avatar/Veo
+prompts, sequential post/coach logic, scoring rubrics, and the per-WP interface
+contracts — read the code in the package each concerns
+(`apps/agent/src/deepinterview_agent/{prep,post,coach,live}`, `scripts/veo`,
+`skills/`) and the contracts in `packages/shared`.

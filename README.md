@@ -62,6 +62,14 @@ pnpm deepinterview init   # scaffold .env from .env.example (fill in keys later)
 > `pnpm build` must run before `pnpm deepinterview init` — the CLI is built into `cli/dist/`.
 > For the Python agent: `uv --directory apps/agent sync` then `uv --directory apps/agent run pytest`.
 
+For local development, the root `pnpm dev` command runs the web (Next.js)
+development task; it does not start the Python agent API. Start the API in a
+separate terminal after syncing its environment:
+
+```bash
+uv --directory apps/agent run uvicorn deepinterview_agent.app:app --reload --port 8000
+```
+
 ### 2. Full-stack path (`docker compose up` — verified)
 
 ```bash
