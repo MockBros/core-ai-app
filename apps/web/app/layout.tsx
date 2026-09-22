@@ -28,24 +28,24 @@ export const metadata = {
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ?? "https://deepinterview.ai",
   ),
-  title: {
-    default: "DeepInterview — Practice the interview out loud",
-    template: "%s · DeepInterview",
+    title: {
+    default: "MockBros — Practice the interview out loud",
+    template: "%s · MockBros",
   },
   description:
-    "Open-source, voice-first AI mock interviews. DeepInterview reads your CV and the job, researches the company, runs an adaptive voice interview, then shows you exactly what to fix. English-first, 10+ languages.",
-  applicationName: "DeepInterview",
+    "Open-source, voice-first AI mock interviews. MockBros reads your CV and the job, researches the company, runs an adaptive voice interview, then shows you exactly what to fix. English-first, 10+ languages.",
+  applicationName: "MockBros",
   openGraph: {
-    title: "DeepInterview — Practice the interview out loud",
+    title: "MockBros — Practice the interview out loud",
     description:
       "Open-source, voice-first AI mock interviews — practice out loud, then pass the real one.",
     url: "/",
-    siteName: "DeepInterview",
+    siteName: "MockBros",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "DeepInterview — Practice the interview out loud",
+    title: "MockBros — Practice the interview out loud",
     description:
       "Open-source, voice-first AI mock interviews — practice out loud, then pass the real one.",
   },

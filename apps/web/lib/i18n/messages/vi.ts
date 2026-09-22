@@ -17,7 +17,7 @@ type Localized<T> = {
  */
 export const vi: Localized<Messages> = {
   common: {
-    appName: "DeepInterview",
+    appName: "MockBros",
     continue: "Tiếp tục",
     back: "Quay lại",
     cancel: "Hủy",
@@ -35,7 +35,7 @@ export const vi: Localized<Messages> = {
     titleLead: "Luyện tập buổi phỏng vấn",
     titleAccent: "giúp bạn nhận được lời mời",
     subtitle:
-      "DeepInterview đọc CV và mô tả công việc của bạn, tìm hiểu về công ty, sau đó chạy một buổi phỏng vấn bằng giọng nói linh hoạt — và chỉ ra chính xác điều cần cải thiện.",
+      "MockBros đọc CV và mô tả công việc của bạn, tìm hiểu về công ty, sau đó chạy một buổi phỏng vấn bằng giọng nói linh hoạt — và chỉ ra chính xác điều cần cải thiện.",
     ctaStart: "Bắt đầu phỏng vấn thử",
     ctaLogin: "Đăng nhập",
   },

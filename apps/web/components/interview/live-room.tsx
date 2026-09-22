@@ -186,7 +186,7 @@ function Scaffold({
         <div className="flex items-center justify-between">
           <div className="flex flex-col">
             <span className="font-mono text-[10px] tracking-[0.16em] text-faint">
-              DEEPINTERVIEW · LIVE
+              MOCKBROS · LIVE
             </span>
             <span className="font-serif text-[17px] text-ink">
               {persona.name}
