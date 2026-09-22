@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextvars import copy_context
 
 import pytest
 from fastapi.testclient import TestClient
@@ -63,6 +64,25 @@ def test_start_trace_and_nested_spans(tracedir) -> None:
     # Nesting: inner's parent is outer.
     assert span_starts[1]["parent_id"] == span_starts[0]["span_id"]
     assert any(e["type"] == "event" and e["name"] == "note" for e in events)
+
+
+def test_trace_can_close_from_foreign_shutdown_context(tracedir) -> None:
+    """LiveKit shutdown callbacks may run in a task copied from entrypoint.
+
+    Closing the scope there must still write one terminal event and must not
+    raise the ContextVar token ownership ValueError that used to abort the
+    worker's final write-back.
+    """
+    scope = tracing.start_trace("live", session_id="sess_live")
+    tid = scope.__enter__()
+
+    copy_context().run(scope.close)
+    # A later owner-context close is harmless and can finish its own reset.
+    scope.close()
+
+    events = _events(tracedir, tid)
+    assert [event["type"] for event in events].count("trace_end") == 1
+    assert events[-1]["status"] == "ok"
 
 
 def test_span_error_is_recorded_not_raised_past_trace(tracedir) -> None:

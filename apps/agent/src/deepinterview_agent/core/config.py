@@ -56,8 +56,9 @@ class Settings(BaseSettings):
     #   ollama  -> LLM   (prep, scoring, and the live turn path)
     #   whisper -> STT   (any OpenAI-compatible /v1/audio/transcriptions server)
     #   kokoro  -> TTS   (kokoro-fastapi's /v1/audio/speech)
+    #   vieneu  -> TTS   (VieNeu-TTS v3 Turbo's /v1/audio/speech)
     # Select them with LLM_PROVIDER=ollama / STT_PROVIDER=whisper /
-    # TTS_PROVIDER=kokoro; each needs its base URL, never an API key.
+    # TTS_PROVIDER=kokoro or vieneu; each needs its base URL, never an API key.
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "qwen3:8b"
     # Live tier, mirroring gemini_model / gemini_model_live: prep and scoring can
@@ -98,6 +99,18 @@ class Settings(BaseSettings):
     # is also Kokoro-82M's native rate. Raw PCM avoids a decode step; a
     # mismatched rate here produces chipmunk/slow-motion speech, not an error.
     kokoro_response_format: str = "pcm"
+    # VieNeu-TTS v3 Turbo's OpenAI-compatible endpoint. VieNeu synthesizes at
+    # 48 kHz natively, but its `sample_rate=24000` request field resamples to
+    # the raw PCM rate that LiveKit's audio emitter consumes.
+    vieneu_base_url: str = "http://localhost:8890/v1"
+    vieneu_model: str = "vieneu-v3-turbo"
+    vieneu_voice: str = "Mai Anh"
+    vieneu_response_format: str = "pcm"
+    vieneu_sample_rate: int = 24000
+    # Optional bearer credential for a protected VieNeu server. Local VieNeu
+    # normally needs no credential; the worker uses LOCAL_API_KEY as a
+    # non-empty OpenAI-client placeholder when this is blank.
+    vieneu_api_key: str | None = None
     # Non-empty placeholder credential for local servers, which need no auth.
     # It must not be "": the openai plugin raises ValueError on an
     # explicitly-passed empty key (stt.py/tts.py "OpenAI API key is required").

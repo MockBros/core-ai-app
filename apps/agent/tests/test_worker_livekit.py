@@ -42,7 +42,7 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
@@ -51,6 +51,7 @@ pytest.importorskip("livekit.agents")
 
 from deepinterview_agent import worker
 from deepinterview_agent.api.session import LiveResultRequest
+from deepinterview_agent.core import tracing
 from deepinterview_agent.core.deps import build_deps
 from deepinterview_agent.live import state
 from deepinterview_agent.live.state import InterviewUserdata
@@ -481,6 +482,27 @@ def test_shutdown_recovers_unsaved_answers_before_deciding_has_answers(
     assert drive.repo.calls == []
 
 
+def test_shutdown_with_tracing_enabled_closes_foreign_trace_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The real shutdown closure must not fail when trace cleanup crosses tasks."""
+    tracing.reset_tracing()
+    tracing.init_tracing(enabled=True, trace_dir=tmp_path)
+    monkeypatch.setattr(worker, "init_observability", lambda _settings: None)
+    try:
+        drive = _drive_entrypoint(monkeypatch)
+        state.add_turn(drive.userdata, "user", _SPOKEN)
+        asyncio.run(drive.shutdown())
+
+        trace_files = list(tmp_path.glob("tr_*.jsonl"))
+        assert trace_files
+        events = [json.loads(line) for line in trace_files[0].read_text().splitlines()]
+        assert [event["type"] for event in events].count("trace_end") == 1
+        assert any(url.endswith("/api/score") for url in drive.http.urls())
+    finally:
+        tracing.reset_tracing()
+
+
 def test_shutdown_payload_is_json_encodable_and_parses_as_live_result_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -614,6 +636,12 @@ def _local_settings(**overrides):
         "kokoro_model": "tts-1",
         "kokoro_voice": "",
         "kokoro_response_format": "pcm",
+        "vieneu_base_url": "http://localhost:8890/v1",
+        "vieneu_model": "vieneu-v3-turbo",
+        "vieneu_voice": "Mai Anh",
+        "vieneu_response_format": "pcm",
+        "vieneu_sample_rate": 24000,
+        "vieneu_api_key": None,
         "local_api_key": "local",
         "local_provider_timeout_sec": 30.0,
         "gemini_api_key": None,
@@ -737,6 +765,128 @@ def test_build_tts_kokoro_picks_the_voice_from_the_language() -> None:
     assert pinned._wrapped_tts._opts.voice == "bf_emma"
 
 
+def test_build_tts_vieneu_uses_a_dedicated_adapter_and_voice() -> None:
+    """VieNeu must not be routed through Kokoro's model/voice assumptions."""
+    from deepinterview_agent.live.vieneu_tts import VieNeuTTS
+
+    tts = worker.build_tts(_local_settings(tts_provider="vieneu"), "en")
+    wrapped = tts._wrapped_tts
+    assert isinstance(wrapped, VieNeuTTS)
+    assert wrapped.model == "vieneu-v3-turbo"
+    assert wrapped.provider == "vieneu"
+    assert wrapped.vieneu_voice == "Mai Anh"
+    assert wrapped.sample_rate == 24000
+    assert wrapped.num_channels == 1
+    assert tts.capabilities.streaming is True
+
+
+def test_vieneu_request_uses_raw_audio_and_explicit_resampling_field() -> None:
+    """The VieNeu model id must stay semantic; 24 kHz is an explicit body field."""
+    from deepinterview_agent.live.vieneu_tts import VieNeuTTS
+
+    tts = VieNeuTTS(
+        base_url="http://localhost:8890/v1",
+        client=SimpleNamespace(),
+    )
+    request = tts._request_kwargs("Xin chao")
+    assert request["model"] == "vieneu-v3-turbo"
+    assert request["model"] != "tts-1"
+    assert request["voice"] == "Mai Anh"
+    assert request["response_format"] == "pcm"
+    assert request["stream_format"] == "audio"
+    assert request["extra_body"] == {"sample_rate": 24000}
+
+
+def test_vieneu_stream_preserves_pcm_bytes_and_24khz_metadata() -> None:
+    """The adapter must pass raw bytes through with matching LiveKit metadata."""
+    from livekit.agents import APIConnectOptions
+
+    from deepinterview_agent.live.vieneu_tts import VieNeuChunkedStream, VieNeuTTS
+
+    pcm = b"\x01\x00\x02\x00"
+    captured: dict[str, Any] = {}
+
+    class _Response:
+        headers: ClassVar[dict[str, str]] = {
+            "content-type": "audio/pcm",
+            "x-sample-rate": "24000",
+        }
+        request_id = "vieneu-test"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def iter_bytes(self):
+            yield pcm[:2]
+            yield pcm[2:]
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    client = SimpleNamespace(
+        audio=SimpleNamespace(
+            speech=SimpleNamespace(
+                with_streaming_response=SimpleNamespace(create=_create),
+            )
+        )
+    )
+    vieneu = VieNeuTTS(base_url="http://localhost:8890/v1", client=client)
+
+    class _Emitter:
+        def __init__(self):
+            self.init: dict[str, Any] = {}
+            self.chunks: list[bytes] = []
+            self.flushed = False
+
+        def initialize(self, **kwargs):
+            self.init = kwargs
+
+        def push(self, chunk):
+            self.chunks.append(chunk)
+
+        def flush(self):
+            self.flushed = True
+
+    async def _run():
+        stream = object.__new__(VieNeuChunkedStream)
+        stream._tts = vieneu
+        stream._input_text = "Xin chao"
+        stream._conn_options = APIConnectOptions(timeout=5.0, max_retry=0)
+        emitter = _Emitter()
+        await stream._run(emitter)
+        return emitter
+
+    emitter = asyncio.run(_run())
+    assert captured["model"] == "vieneu-v3-turbo"
+    assert captured["stream_format"] == "audio"
+    assert captured["extra_body"] == {"sample_rate": 24000}
+    assert emitter.init == {
+        "request_id": "vieneu-test",
+        "sample_rate": 24000,
+        "num_channels": 1,
+        "mime_type": "audio/pcm",
+    }
+    assert b"".join(emitter.chunks) == pcm
+    assert emitter.flushed is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("vieneu_response_format", "wav", "VIENEU_RESPONSE_FORMAT"),
+        ("vieneu_sample_rate", 48000, "VIENEU_SAMPLE_RATE"),
+        ("vieneu_voice", "", "VIENEU_VOICE"),
+    ],
+)
+def test_build_tts_vieneu_rejects_incompatible_configuration(field, value, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        worker.build_tts(_local_settings(tts_provider="vieneu", **{field: value}), "en")
+
+
 def test_build_tts_kokoro_beats_the_cloud_language_reroute() -> None:
     """An explicit local selection must never be upgraded to a paid vendor.
 
@@ -794,6 +944,11 @@ def test_unreachable_local_providers_names_the_url_and_env_var() -> None:
     )
     assert blank == ["KOKORO_BASE_URL (TTS_PROVIDER=kokoro)"]
 
+    vieneu_blank = worker._unreachable_local_providers(
+        _local_settings(tts_provider="vieneu", vieneu_base_url="")
+    )
+    assert vieneu_blank == ["VIENEU_BASE_URL (TTS_PROVIDER=vieneu)"]
+
     # All-cloud selection probes nothing.
     assert worker._unreachable_local_providers(_local_settings(llm_provider="gemini")) == []
 
@@ -824,6 +979,9 @@ def test_local_provider_values_are_case_insensitive_and_aliased() -> None:
     for value in ("kokoro", "Kokoro", "local"):
         tts = worker.build_tts(_local_settings(tts_provider=value), "en")
         assert tts._wrapped_tts._opts.voice == "af_heart", value
+
+    vieneu = worker.build_tts(_local_settings(tts_provider="vieneu"), "en")
+    assert vieneu._wrapped_tts.vieneu_voice == "Mai Anh"
 
     # And an unknown value must NOT be treated as local.
     assert worker._unreachable_local_providers(_local_settings(stt_provider="deepgram")) == []

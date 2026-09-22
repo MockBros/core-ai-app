@@ -275,18 +275,20 @@ def _require_live_providers(settings) -> None:
 # OpenAI-compatible server at a base URL" — not a vendor, so each stage takes
 # aliases: whatever you actually run, the adapter is identical. Whisper and
 # Qwen3-ASR both serve /v1/audio/transcriptions; Ollama, vLLM, LM Studio and
-# llama.cpp all serve /v1/chat/completions; Kokoro serves /v1/audio/speech.
+# llama.cpp all serve /v1/chat/completions; Kokoro and VieNeu serve
+# /v1/audio/speech.
 # `local` works everywhere as the neutral name.
 _LOCAL_LLM = frozenset({"ollama", "vllm", "llamacpp", "lmstudio", "local"})
 _LOCAL_STT = frozenset({"whisper", "faster-whisper", "qwen3-asr", "qwen-asr", "speaches", "local"})
-_LOCAL_TTS = frozenset({"kokoro", "local"})
+_LOCAL_TTS = frozenset({"kokoro", "vieneu", "local"})
 
 # Selected local provider -> (base-URL setting, env var named in the error).
-_LOCAL_PROVIDERS = {
-    "llm_provider": (_LOCAL_LLM, "ollama_base_url", "OLLAMA_BASE_URL"),
-    "stt_provider": (_LOCAL_STT, "whisper_base_url", "WHISPER_BASE_URL"),
-    "tts_provider": (_LOCAL_TTS, "kokoro_base_url", "KOKORO_BASE_URL"),
-}
+_LOCAL_PROVIDERS = (
+    ("llm", _LOCAL_LLM, "ollama_base_url", "OLLAMA_BASE_URL"),
+    ("stt", _LOCAL_STT, "whisper_base_url", "WHISPER_BASE_URL"),
+    ("tts", frozenset({"kokoro", "local"}), "kokoro_base_url", "KOKORO_BASE_URL"),
+    ("tts", frozenset({"vieneu"}), "vieneu_base_url", "VIENEU_BASE_URL"),
+)
 
 
 def _provider(settings, stage: str) -> str:
@@ -312,14 +314,13 @@ def _unreachable_local_providers(settings) -> list[str]:
     import httpx
 
     problems: list[str] = []
-    for field, (accepted, url_field, env_name) in _LOCAL_PROVIDERS.items():
-        stage = field.removesuffix("_provider")
+    for stage, accepted, url_field, env_name in _LOCAL_PROVIDERS:
         selected = _provider(settings, stage)
         if selected not in accepted:
             continue
         base = (getattr(settings, url_field, "") or "").rstrip("/")
         if not base:
-            problems.append(f"{env_name} ({field.upper()}={selected})")
+            problems.append(f"{env_name} ({stage.upper()}_PROVIDER={selected})")
             continue
         try:
             httpx.get(f"{base}/models", timeout=settings.local_probe_timeout_sec)
@@ -430,6 +431,24 @@ def _local_kokoro_tts(settings, language="en"):
     )
 
 
+def _local_vieneu_tts(settings):
+    """Local VieNeu-TTS v3 Turbo with an explicit 24 kHz PCM request adapter."""
+    from livekit.agents import tts as agents_tts
+
+    from .live.vieneu_tts import VieNeuTTS
+
+    return agents_tts.StreamAdapter(
+        tts=VieNeuTTS(
+            base_url=settings.vieneu_base_url,
+            model=settings.vieneu_model,
+            voice=settings.vieneu_voice,
+            response_format=settings.vieneu_response_format,
+            sample_rate=settings.vieneu_sample_rate,
+            api_key=settings.vieneu_api_key or settings.local_api_key,
+        )
+    )
+
+
 def build_tts(settings, language="en"):
     lang = _TTS_LANG.get(language, "en")
     provider = _provider(settings, "tts")
@@ -439,7 +458,10 @@ def build_tts(settings, language="en"):
     # overridden by the cloud language-routing chain below. Kokoro can't speak
     # every language we support, so an unsupported one falls through to the
     # cloud voices rather than reading the text in the wrong language.
-    if provider in _LOCAL_TTS:
+    if provider == "vieneu":
+        return _local_vieneu_tts(settings)
+
+    if provider in {"kokoro", "local"}:
         if language in _KOKORO_VOICE or settings.kokoro_voice:
             return _local_kokoro_tts(settings, language)
         log.warning(
@@ -838,7 +860,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 },
             )
         finally:
-            _live_trace.__exit__(None, None, None)
+            _live_trace.close()
 
         # Stop the checkpointer first so it can't race the final, authoritative
         # persist below.

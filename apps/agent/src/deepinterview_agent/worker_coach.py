@@ -128,7 +128,7 @@ async def entrypoint(ctx: JobContext) -> None:
         try:
             add_event("coach.end", {"turns": len(userdata.transcript)})
         finally:
-            _coach_trace.__exit__(None, None, None)
+            _coach_trace.close()
         await guard.aclose()
         if not userdata.transcript:
             return

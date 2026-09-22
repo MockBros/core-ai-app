@@ -193,6 +193,117 @@ _current_trace: ContextVar[_TraceInfo | None] = ContextVar("di_trace", default=N
 _span_stack: ContextVar[tuple[_SpanInfo, ...]] = ContextVar("di_spans", default=())
 
 
+class _TraceScope:
+    """A trace context that can also be closed by a different task.
+
+    Prep/score use ``with start_trace(...)`` and therefore enter/exit in one
+    context.  LiveKit registers its shutdown callback from the entrypoint but
+    invokes it from a job-lifecycle task, so a generator context manager would
+    try to reset a ``ContextVar`` token created elsewhere.  Keep the normal
+    context-manager API while making the explicit ``close()`` lifecycle
+    idempotent and context-safe for that callback boundary.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        session_id: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        self._name = name
+        self._session_id = session_id
+        self._metadata = metadata
+        self._entered = False
+        self._nested = False
+        self._trace_id = "tr_disabled"
+        self._info: _TraceInfo | None = None
+        self._previous: _TraceInfo | None = None
+        self._token = None
+        self._ended = False
+        self._reset = False
+
+    def __enter__(self) -> str:
+        if self._entered:
+            return self._trace_id
+        self._entered = True
+        if not is_enabled():
+            return self._trace_id
+
+        outer = _current_trace.get()
+        if outer is not None:
+            self._nested = True
+            self._trace_id = outer.trace_id
+            return self._trace_id
+
+        trace_id = _new_trace_id()
+        info = _TraceInfo(
+            trace_id=trace_id,
+            name=self._name,
+            session_id=self._session_id,
+            start_ts=_utc_now(),
+            start_perf=time.perf_counter(),
+        )
+        self._trace_id = trace_id
+        self._info = info
+        self._previous = outer
+        self._token = _current_trace.set(info)
+        _append_event(
+            {
+                "type": "trace_start",
+                "trace_id": trace_id,
+                "name": self._name,
+                "session_id": self._session_id,
+                "ts": info.start_ts,
+                "metadata": self._metadata or {},
+            }
+        )
+        return trace_id
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        status = "error" if exc is not None else "ok"
+        error = f"{type(exc).__name__}: {exc}" if exc is not None else None
+        self.close(status=status, error=error)
+        return False
+
+    def close(self, *, status: str = "ok", error: str | None = None) -> None:
+        """Finish the trace once and reset the current context when possible."""
+        if not self._entered or self._nested or self._info is None:
+            return
+        info = self._info
+        if not self._ended:
+            self._ended = True
+            duration_ms = (time.perf_counter() - info.start_perf) * 1000
+            _append_event(
+                {
+                    "type": "trace_end",
+                    "trace_id": info.trace_id,
+                    "name": info.name,
+                    "session_id": info.session_id,
+                    "ts": _utc_now(),
+                    "duration_ms": round(duration_ms, 1),
+                    "status": status,
+                    **({"error": error[:500]} if error else {}),
+                }
+            )
+        self._reset_in_current_context()
+
+    def _reset_in_current_context(self) -> None:
+        if self._reset or self._token is None:
+            return
+        try:
+            _current_trace.reset(self._token)
+        except ValueError:
+            # The shutdown callback may run in a copied task context.  The
+            # token belongs to the entrypoint context and cannot be reset here;
+            # clear this callback's copied value without hiding other errors.
+            if _current_trace.get() is self._info:
+                _current_trace.set(self._previous)
+            log.debug("trace context closed from a different task; owner reset deferred")
+            return
+        self._reset = True
+
+
 def current_trace_id() -> str | None:
     t = _current_trace.get()
     return t.trace_id if t is not None else None
@@ -263,63 +374,15 @@ def _otel_end(cm: Any | None, span: Any | None, *, status: str, error: str | Non
         log.debug("otel span close failed (%s)", exc)
 
 
-@contextlib.contextmanager
 def start_trace(
     name: str, *, session_id: str | None = None, metadata: dict[str, Any] | None = None
-) -> Iterator[str]:
+) -> _TraceScope:
     """Open a trace; yields its id. Nested traces reuse the outer one.
 
-    When disabled this yields a throwaway id and writes nothing, so call
-    sites need no ``is_enabled()`` guards of their own.
+    The returned scope supports both ``with start_trace(...)`` and an explicit
+    ``scope.close()`` for lifecycle callbacks that run in another task.
     """
-    if not is_enabled():
-        yield "tr_disabled"
-        return
-    outer = _current_trace.get()
-    if outer is not None:
-        # Nested: attribute work to the outer trace instead of fragmenting.
-        yield outer.trace_id
-        return
-    trace_id = _new_trace_id()
-    info = _TraceInfo(
-        trace_id=trace_id,
-        name=name,
-        session_id=session_id,
-        start_ts=_utc_now(),
-        start_perf=time.perf_counter(),
-    )
-    token = _current_trace.set(info)
-    _append_event(
-        {
-            "type": "trace_start",
-            "trace_id": trace_id,
-            "name": name,
-            "session_id": session_id,
-            "ts": info.start_ts,
-            "metadata": metadata or {},
-        }
-    )
-    status, error = "ok", None
-    try:
-        yield trace_id
-    except Exception as exc:
-        status, error = "error", f"{type(exc).__name__}: {exc}"
-        raise
-    finally:
-        duration_ms = (time.perf_counter() - info.start_perf) * 1000
-        _append_event(
-            {
-                "type": "trace_end",
-                "trace_id": trace_id,
-                "name": name,
-                "session_id": session_id,
-                "ts": _utc_now(),
-                "duration_ms": round(duration_ms, 1),
-                "status": status,
-                **({"error": error[:500]} if error else {}),
-            }
-        )
-        _current_trace.reset(token)
+    return _TraceScope(name, session_id=session_id, metadata=metadata)
 
 
 @contextlib.contextmanager

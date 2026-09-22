@@ -5,13 +5,17 @@ machine. No OpenAI key, no Gemini key, no Deepgram key, no Cartesia key, and
 nothing about your CV leaves your box.
 
 ```bash
-LLM_PROVIDER=ollama   STT_PROVIDER=whisper   TTS_PROVIDER=kokoro
+LLM_PROVIDER=ollama   STT_PROVIDER=whisper   TTS_PROVIDER=vieneu
 ```
+
+Set `TTS_PROVIDER=kokoro` to keep using the existing Kokoro path.
 
 All three are reached over the **OpenAI HTTP shape**, so they take a base URL
 instead of an API key, and any compatible server works — Ollama, vLLM, LM Studio,
-llama.cpp, Speaches, kokoro-fastapi. DeepInterview added no new dependency for
-this: it reuses `livekit-plugins-openai` with a `base_url` override.
+llama.cpp, Speaches, kokoro-fastapi, or VieNeu-TTS. Ollama, Whisper and Kokoro
+reuse `livekit-plugins-openai` with a `base_url` override; VieNeu uses a small
+dedicated adapter because its 24 kHz resampling field is not part of that
+plugin's request contract.
 
 > ### One honest caveat, up front
 > **LiveKit is still the real-time transport.** Local models replace the *AI*
@@ -93,6 +97,28 @@ docker run -d -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
 
 Kokoro-82M is small enough to run comfortably on CPU.
 
+### TTS — VieNeu-TTS v3 Turbo (CPU/ONNX)
+
+VieNeu-TTS v3 Turbo is the selected real-voice spike path. Its native output is
+48 kHz, but its OpenAI-compatible API accepts the explicit JSON field
+`sample_rate=24000` and returns raw signed-16 little-endian mono PCM when
+`response_format=pcm` and `stream_format=audio` are selected. The worker checks
+the `audio/pcm` response (and `X-Sample-Rate` when present) before handing the
+bytes to LiveKit's 24 kHz mono emitter.
+
+Start the VieNeu API server separately from the repository checkout. The port
+below avoids the agent API's port 8000 and Kokoro's port 8880:
+
+```bash
+VIENEU_BACKEND=onnx VIENEU_DEVICE=cpu PORT=8890 \
+  uv run python -m apps.openai_speech
+```
+
+VieNeu's documented Windows standalone installer or its own `uv sync` setup can
+be used to provide that server. The DeepInterview `local` Compose profile does
+not start VieNeu; when the worker runs in a container, use
+`VIENEU_BASE_URL=http://host.docker.internal:8890/v1` instead of `localhost`.
+
 ### Or bring them all up with the `local` profile
 
 ```bash
@@ -123,6 +149,15 @@ TTS_PROVIDER=kokoro
 KOKORO_BASE_URL=http://localhost:8880/v1
 KOKORO_MODEL=tts-1        # do not change — see below
 KOKORO_VOICE=             # blank = pick the voice from the session language
+
+# Or use the VieNeu v3 Turbo adapter (CPU/ONNX server above).
+TTS_PROVIDER=vieneu
+VIENEU_BASE_URL=http://localhost:8890/v1
+VIENEU_MODEL=vieneu-v3-turbo
+VIENEU_VOICE=Mai Anh
+VIENEU_RESPONSE_FORMAT=pcm
+VIENEU_SAMPLE_RATE=24000
+VIENEU_API_KEY=           # blank = local server; LOCAL_API_KEY remains the client placeholder
 
 # Company research is the one remaining outbound call. Mock it for a fully
 # offline run; leave it on Tavily/Exa if you want real company intel.
