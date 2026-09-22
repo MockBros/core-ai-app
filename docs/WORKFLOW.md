@@ -65,8 +65,12 @@ coordinates contributors, has meaningful dependencies, needs recovery, or is
 unsafe to resume from a diff alone. Use
 [`templates/exec-plan.md`](templates/exec-plan.md); keep outcome, context,
 approach, risks, progress, decisions, and validation in that file. Move it to
-[`plans/completed/`](plans/completed/) only after the requested outcome and
-evidence are recorded.
+[`plans/deferred/`](plans/deferred/) when the work is intentionally paused
+before its outcome and evidence are complete. Record the deferral date, reason,
+and resume condition in the plan; deferred plans are retained context, not
+active work instructions. Move the plan back to `plans/active/` before
+resuming, and move it to [`plans/completed/`](plans/completed/) only after the
+requested outcome and evidence are recorded.
 
 ### Improve The Harness
 

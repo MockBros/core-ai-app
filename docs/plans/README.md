@@ -22,18 +22,25 @@ and keep its fresh-rerun status explicit.
 ```text
 docs/plans/active/<slug>.md
   -> update progress, decisions, and validation during implementation
-  -> record the verified result
-  -> move to docs/plans/completed/<slug>.md
+  -> (pause: record date, reason, and resume condition)
+     docs/plans/deferred/<slug>.md
+  -> (resume: move back and set Status to Active)
+     docs/plans/active/<slug>.md
+  -> (complete: record the verified result)
+     docs/plans/completed/<slug>.md
 ```
 
-The active plan is the primary task artifact. Promote a lasting product or
-architecture decision into [`../decisions/`](../decisions/); keep task-local
-choices in the plan. Move a plan to `completed/` only after its requested
-outcome and evidence are recorded. Completed plans are historical evidence,
-not default task instructions.
+Plans in `active/` are the current durable task artifacts. A plan in
+`deferred/` is intentionally paused working memory, not a current instruction;
+it must state why it is paused and what permits resumption. Promote a lasting
+product or architecture decision into [`../decisions/`](../decisions/); keep
+task-local choices in the plan. Move a plan to `completed/` only after its
+requested outcome and evidence are recorded. Completed plans are historical
+evidence, not default task instructions.
 
 ## Plan Indexes
 
 - [`active/README.md`](active/README.md): where current durable plans live.
+- [`deferred/README.md`](deferred/README.md): paused plans and resumption rules.
 - [`completed/README.md`](completed/README.md): lifecycle and historical-plan
   retention guidance.

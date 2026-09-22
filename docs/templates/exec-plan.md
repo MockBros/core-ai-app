@@ -4,7 +4,7 @@ Date: YYYY-MM-DD
 
 ## Status
 
-Active | Blocked | Completed
+Active | Deferred | Blocked | Completed
 
 ## Outcome
 
@@ -36,6 +36,13 @@ changes the approach. Preserve the shared-contract sequence when
 
 - Risk and mitigation.
 - Recovery or rollback procedure.
+
+## Deferral
+
+If the plan is intentionally paused before completion, record the date, reason,
+and concrete condition that permits resumption. Move the file to
+`docs/plans/deferred/` while it is paused and return it to `docs/plans/active/`
+before resuming.
 
 ## Progress
 

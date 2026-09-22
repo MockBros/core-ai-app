@@ -36,6 +36,8 @@ repository, not this harness, owns product behavior.
   must inherit.
 - [`plans/README.md`](plans/README.md): durable working memory and lifecycle.
 - [`plans/active/README.md`](plans/active/README.md): current plan location.
+- [`plans/deferred/README.md`](plans/deferred/README.md): intentionally paused
+  plans and resume rules.
 - [`plans/completed/README.md`](plans/completed/README.md): validated historical
   plans.
 - [`runbooks/README.md`](runbooks/README.md): verified offline, local, Compose,

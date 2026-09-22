@@ -21,6 +21,7 @@ REQUIRED_PATHS = (
     Path("docs/HARNESS.md"),
     Path("docs/WORKFLOW.md"),
     Path("docs/plans/active/README.md"),
+    Path("docs/plans/deferred/README.md"),
     Path("docs/plans/completed/README.md"),
     Path(".agents/skills/onboard-repository/scripts/render_patch.py"),
     Path(".agents/skills/onboard-repository/scripts/emit_evidence_bundle.py"),

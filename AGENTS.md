@@ -15,7 +15,10 @@ architecture, plan, code, and validation material.
   required.
 - Use one repository-owned plan in [`docs/plans/active/`](docs/plans/active/)
   when work spans sessions, coordinates contributors, has dependencies, or
-  needs recovery. Move it to `docs/plans/completed/` only after validation is
+  needs recovery. If the work is intentionally paused, record the deferral
+  date, reason, and resume condition, then move the plan to
+  [`docs/plans/deferred/`](docs/plans/deferred/). Return it to `active/` before
+  resuming; move it to `docs/plans/completed/` only after validation is
   recorded.
 - Before editing, identify repository authority for each new externally
   observable policy. If materially different choices remain open, stop before

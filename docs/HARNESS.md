@@ -17,9 +17,13 @@ installer, task database, generated lifecycle registry, or
 guidance; their presence is not evidence that an external installer ran.
 
 Use [`WORKFLOW.md`](WORKFLOW.md) for operating rules and
-[`plans/active/`](plans/active/) for durable work that needs recovery or
-coordination. Git, tests, runtime signals, and the Codex task tree are the
-collaboration record.
+[`plans/active/`](plans/active/) for current durable work that needs recovery
+or coordination. If that work is intentionally paused, move its plan to
+[`plans/deferred/`](plans/deferred/) after recording the deferral date, reason,
+and resume condition; deferred plans are not active instructions. Move a plan
+back to `active/` before resuming it, and use
+[`plans/completed/`](plans/completed/) only for verified outcomes. Git, tests,
+runtime signals, and the Codex task tree are the collaboration record.
 
 ## Authority And Claim Classification
 

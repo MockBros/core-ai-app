@@ -48,3 +48,11 @@ apps/web/public/avatars/
 # Local trace store (WP-12): `deepinterview traces` reads this; per-run JSONL,
 # machine-local and never committed. Override location with TRACE_DIR.
 .deepinterview/
+
+# Personal local docs
+docs/personal/
+
+# Local runtime/browser captures and temporary checkouts
+/tmp/
+
+artifacts/hackathon/
